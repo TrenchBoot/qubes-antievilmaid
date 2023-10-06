@@ -1,4 +1,4 @@
-name: Test build and package QubesOS RPMs
+name: Create QubesOS RPMs
 
 on:
   pull_request:
@@ -7,11 +7,7 @@ on:
       - '*'
 
 jobs:
-  qubes-dom0-package:
-    uses: TrenchBoot/.github/.github/workflows/qubes-dom0-package.yml@master
+  antievilmaid:
+    uses: TrenchBoot/.github/.github/workflows/qubes-dom0-packagev2.yml@master
     with:
-      base-commit: '62819a6fdf58d3d3c47aff5096dea9fb88ce1d53'
-      patch-start: 0000
       qubes-component: 'antievilmaid'
-      spec-pattern: '/^Source0:/'
-      spec-file: 'anti-evil-maid'
