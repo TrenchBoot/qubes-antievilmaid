@@ -16,37 +16,20 @@ http://blog.invisiblethings.org/2011/09/07/anti-evil-maid.html
 Requirements and security notes ("before you start")
 ====================================================
 
-* Only TPM version 1.2 is currently supported. It may be possible to
-  configure your 2.0 TPM to emulate the 1.2 interface.
+* Both TPM versions 1.2 and 2.0 are supported.
 
 * AEM is not compatible with (U)EFI boot. Legacy boot is required.
 
 * If you are using LUKS with LVM, you must encrypt the whole volume group
   instead of each volume, or else AEM will fail to boot.
 
-* You MUST set a TPM owner password
+* You MUST set a TPM owner password.
 
-* Unless you're installing AEM to internal disk, TPM SRK password SHOULD
-  NOT be set (otherwise tboot will not be able to check whether critical
-  parts of RAM were not altered during S3 sleep). Please be aware that by
-  installing to internal disk and setting a TPM SRK password, your RAM
-  WILL NOT be protected against tampering when your laptop is suspended,
-  so make sure it is completely shut down any time an attacker might gain
+* Resume from S3 sleep was not tested on TrenchBoot. S3 in itself opens many
+  new attack vectors as many of the security features are disabled when CPU
+  comes from reset and must be enabled by firmware. For maximum security, make
+  sure your laptop is completely shut down any time an attacker might gain
   physical access.
-
-* When RAM tampering is detected on wake-up from S3 sleep, the default
-  tboot policy only prints a warning into its log (`sudo txt-stat`) so
-  even if you checked it immediately after each wake-up, the attacker
-  might already have exfiltrated your login passphrase. Fix this by
-  either using two-factor for desktop login (weak) or create stronger
-  Launch Control Policy (LCP) and Verified Launch Policy (LCP) and write
-  them into TPM NVRAM -- especially make sure that tboot will forcefully
-  halt/reboot the platform if RAM tampering is detected. See tboot docs
-  for more information (`/usr/share/doc/tboot`). Creating a small NVRAM
-  area for tboot to write last error code might be a good idea for
-  debugging crashes on S3 suspend/resume:
-
-  `sudo tpmnv_defindex -i 0x20000002 -s 8 -pv 0 -rl 0x07 -wl 0x07 -p <ownerpw>`
 
 * Be aware that Intel TXT is vulnerable to System Management Mode (SMM)
   exploits like overwriting System Management Interrupt (SMI) handlers.
@@ -57,14 +40,9 @@ Requirements and security notes ("before you start")
   again, relies on the the same BIOS vendor who wrote a buggy SMM code
   to safely implement STM). Additionally, STM does not appear to be
   widely available yet (STM specification released mid-2015 by Intel).
-  You can check whether your platform includes STM:
-
-    `sudo txt-stat | grep -iA 1 stm`
-
-  Seeing "stm: 0" and "stm_hash" being all zeros means you DO NOT have
-  STM. Either way, BIOS is now part of your Trusted Computing Base (TCB)
-  and you need to prevent attackers with physical access from modifying
-  it. Good luck.
+  Either way, BIOS is now part of your Trusted Computing Base (TCB) and
+  you need to prevent attackers with physical access from modifying it.
+  Good luck.
 
   Some hints: connect the write protect pin on BIOS flash chip to ground
   (prevents attacker from booting their own software which would bypass
@@ -88,31 +66,42 @@ Requirements and security notes ("before you start")
     * note that any potential TPM exploits (should) have no means of
       compromising your system directly -- a TPM under attacker's control
       can only be used to hide the fact that a compromise has occurred
-      (ie. defeating the whole AEM feature)
+      (i.e. defeating the whole AEM feature)
   * BIOS (a few vendors)
     * it's full of holes!
   * that the attacker cannot get physically inside your laptop without
     you noticing (see the glitter hint above)
 
-Upgrading to AEM v4
-===================
+Upgrading AEM
+=============
 
-If you have an existing AEM installation, there are a few steps required
-after updating AEM packages to version >= 4.0 (available since Qubes R4).
+Pre-v4.2.1 AEM was implemented with Trusted Boot (aka. tboot):
 
-The easiest way to upgrade is to completely reset the TPM and start from
-scratch and re-create all existing AEM devices.
+https://sourceforge.net/projects/tboot/
+
+Since v4.2.1 TrenchBoot is used instead:
+
+https://trenchboot.org
+
+TrenchBoot uses Multiboot2 protocol, contrary to tboot's Multiboot. Its logic
+is embedded into GRUB2 and Xen, there is no additional stage between those two.
+This makes clear distinction between pre- and post-dynamic launch components.
+
+Switching between those two implementations should be straightforward, just
+follow "Xen/kernel/BIOS/firmware upgrades" section below.
+
+In case of AEM older than v4, additional steps are required. The easiest way to
+upgrade is to completely reset the TPM (via BIOS, depending on vendor this may
+require temporarily disabling TXT, make sure to turn it back on afterwards) and
+start from scratch and re-create all existing AEM devices.
 
 Should you want to migrate without resetting the TPM (in case you're using
 it for something else besides Qubes AEM), you can manually replicate the
 steps taken in the TPM setup script (/usr/sbin/anti-evil-maid-tpm-setup).
 Note that you still need to re-create all provisioned AEM media afterwards.
 
-Otherwise, perform a TPM reset (via BIOS) and skip to the "Installation"
-section below.
-
 Installation
-=============
+============
 
 The instructions below assume Qubes OS.
 
@@ -140,8 +129,15 @@ PCR-04: 93 33 4E 81 A6 9C 80 54 D6 87 C7 FD 76 7C 6F 4C 70 FC C6 73
 
 ... then your TPM is supported by your kernel.
 
-If your tpm has already been owned in the past, you can reset it by running
-tpm_clear -z, powering your computer off, and then resetting TPM in the BIOS
+TPM2.0 introduced different hash algorithms to PCRs. Those can be read by:
+
+# cat /sys/class/tpm/tpm0/pcr-sha256/<N>
+
+... where <N> is PCR number, between 0 and 23 inclusive. Different algorithms
+may be used in place of 'sha256', but TPM vendors rarely implement anything
+beyond SHA1 and SHA256 required by the TPM specification.
+
+If your TPM has already been owned in the past, you can reset it in the BIOS
 (e.g.: TPM Authentication Reset).
 
 c) Initialize the TPM for use with AEM
@@ -165,38 +161,27 @@ will _not_ need to be re-sealed.
 
 a) SINIT module
 
-You should download the SINIT module required for your system.
+You should download the SINIT module required for your system. All the modules
+could be downloaded from:
 
-Intel documented the required SINIT module depending on your CPU platform in:
-http://software.intel.com/en-us/articles/intel-trusted-execution-technology
-But DO NOT download the modules besides the SINIT/RACM from here. The download links provide old versions and broken binaries.
+https://cdrdv2.intel.com/v1/dl/getContent/630744?explicitVersion=true
 
-You can then download the module and unzip it. All the modules could be
-downloaded from:
-
-https://cdrdv2.intel.com/v1/dl/getContent/630744?wapkw=intel%20txt%20sinit%20acm%20revocation%20
-
-Find the module fitting to your platform and rename it to the names mentioned on the intel website link.
-
-Also, make sure you have the latest RACM update, if available (2nd & 3rd gen):
-https://software.intel.com/system/files/article/183305/intel-txt-sinit-acm-revocation-tools-guide-rev1-0_2.pdf
-
-It's possible to use 3rd gen SINIT/RACM on 2nd gen platforms. In fact, the
-only RACM available at the time of writing is for the 3rd gen, while the 2nd
-gen platforms were also affected by the buffer overflow bug in old SINIT
-version.
-
-Finally, you should retrieve the BIN file inside /boot in dom0. E.g., run from
-dom0:
+Find the module fitting to your platform using the list included in downloaded
+archive. Finally, you should retrieve the BIN file inside /boot in dom0. E.g.,
+run from dom0:
 
 $ sudo -s
 # qvm-run --pass-io vm_name_containing_bin_file 'cat /home/user/path_to_sinit/name_of_sinit_file.BIN' > /boot/name_of_sinit_file.BIN
+
+It is best to keep original file name, both because GRUB configuration script
+searches for specific pattern (`*sinit*.bin`, case ignored) and because version
+number is included in the name, which should make checking for updates easier.
 
 NOTE: The SINIT files are digitally signed by Intel. While there is no easy
 way to verify their integrity after downloading (and after copying to Dom0),
 still, the operation of placing such a file into Dom0's /boot filesystem
 should be reasonably safe to do -- after all the file should not be processed
-by any software in Dom0, and only by the SENTER instruction of the processes,
+by any software in Dom0, and only by the SENTER instruction of the processor,
 which, we hope, correctly verifies the signature before executing it...
 
 b) Create an Anti Evil Maid device:
@@ -210,12 +195,12 @@ suffixes for destroyed devices.
 Installation directly onto a (truly) read-only media (such as a CD-R) is not
 supported. You can, however, copy the contents of an existing RW media onto
 RO media after the initial sealing takes place. Physical write-protect
-switches on USB sticks are fine (install AEM in RW mode, then
-flip the switch and proceed to use as RO media). Remember to always pull
-out the RO media when your text secret or TOTP code is displayed! Failing
-to do that will result in invalidation of freshness token in the TPM memory
-and the AEM media will fail to perform verified boot next time, falling
-back to non-AEM-protected mode.
+switches on USB sticks are fine (install AEM in RW mode, then flip the switch
+and proceed to use as RO media). Remember to always pull out the RO media
+when your text secret or TOTP code is displayed! Failing to do that will
+result in invalidation of freshness token in the TPM memory and the AEM media
+will fail to perform verified boot next time, falling back to
+non-AEM-protected mode.
 
 For example, to install on the internal boot partition (assuming that it
 is /dev/sda1):
@@ -258,8 +243,8 @@ For more details, see the associated qubes-devel mailing list thread:
 In case you would like to install multi-factor AEM on internal disk, beware
 that keyboard observation attacks cannot be prevented! Plus, you still need
 to have TPM SRK password set. The only advantage over plain static text secret
-is, of course, that there's not static secret **shown on the screen** to
-observe (ie. cover the keyboard while typing AEM passwords).
+is, of course, that there's no static secret **shown on the screen** to
+observe (i.e. cover the keyboard while typing AEM passwords).
 
 If you've chosen to install AEM on an external device (and not the internal
 drive), you should then remove the internal boot partition from dom0's
@@ -274,9 +259,11 @@ your USB controller from dom0:
   1. Open the file `/etc/default/grub` in dom0.
   2. Find the line that begins with `GRUB_CMDLINE_LINUX`.
   3. If present, remove `rd.qubes.hide_all_usb` from that line.
-  4. Save and close the file.
-  5. Run the command `grub2-mkconfig -o /boot/grub2/grub.cfg` in dom0.
-  6. Reboot.
+  4. If present, change `usbcore.authorized_default=0` to
+     `usbcore.authorized_default=-1`.
+  5. Save and close the file.
+  6. Run the command `grub2-mkconfig -o /boot/grub2/grub.cfg` in dom0.
+  7. Reboot.
 
 c) Create a secret text (note: it cannot be larger than 255 bytes):
 
@@ -297,11 +284,13 @@ course see these secrets. So they are probably not the right place to
 store your most intimate confessions. ;)
 
 4) Reboot the system, choose one of the entries called "AEM Qubes". This will
-attempt to perform a "measured launch" using tboot and the SINIT module you
-downloaded, which records the Xen, kernel, and initrd versions used in PCRs
+attempt to perform a "measured launch" using TrenchBoot and the SINIT module
+you downloaded, which records the Xen, kernel, and initrd versions used in PCRs
 17-18 of the TPM for use in sealing and unsealing your secret. If the measured
-launch fails for any reason, tboot will fall back to a normal boot and AEM
-will not function.
+launch fails for any reason, TrenchBoot will reboot the platform and AEM entry
+will not boot on the next attempt, printing the error code instead. In such
+case full power cycle is required to clear that error before AEM boot can be
+attempted again.
 
 a) Enter your SRK password if prompted. You won't see your secret afterwards,
 because it hasn't been sealed yet (seeing a `Freshness token unsealing
@@ -323,33 +312,16 @@ Note: The PCRs used to seal to can be changed in /etc/anti-evil-maid.conf
 them and you want to reseal immediately, run anti-evil-maid-seal manually
 once.
 
-If you get a message that the "PCR sanity check failed" and you are sure you
-have saved the right SINIT blob in step 3.a, then check the tboot log for
-details. The easiest way to view it is to set "logging=vga vga_delay=10" on
-the "multiboot /tboot.gz" line in grub.cfg and reboot. Alternatively, run
-`sudo txt-stat` from dom0. For more information, see the tboot readme
-(/usr/share/doc/tboot/README on an installed system).
-
-b) If a chunk of your installed RAM seems to be missing after the reboot
-(which can be checked by running "xl info" in dom0), do the following:
-
-# echo 'export GRUB_CMDLINE_TBOOT=min_ram=0x2000000' >>/etc/default/grub
-# grub2-mkconfig -o /boot/grub2/grub.cfg
-
-Then go to step 4.a again. A discussion of this problem can be found at
-http://thread.gmane.org/gmane.comp.boot-loaders.tboot.devel/610/focus=611
-and by searching for "min_ram" in the qubes mailing lists.
-
-c) Now, every time you boot your system (from your Anti Evil Maid stick)
+b) Now, every time you boot your system (from your Anti Evil Maid stick)
 you should see your secret text or TOTP code displayed *before* you
 enter your LUKS disk encryption or key file passphrase.
 
 Xen/kernel/BIOS/firmware upgrades
-==================================
+=================================
 
-After Xen, kernel, BIOS, or firmware upgrades, you will need to reboot
+After Xen, kernel, SINIT module, or firmware upgrades, you will need to reboot
 and enter your disk decryption passphrase even though you can't see your
-secret. Please note that you will see a `Freshness toekn unsealing failed!`
+secret. Please note that you will see a `Freshness token unsealing failed!`
 error. It (along with your AEM secrets) will be resealed again automatically
 later in the boot process (see step 4.a).
 
@@ -404,7 +376,7 @@ of your encrypted Qubes OS drive, change the LUKS passphrase:
 
 As these actions will change the LUKS header, which is fed into one
 of the TPM PCRs upon each AEM boot, all the existing AEM media will
-get invalidated (ie. fall back to unverified boot).
+get invalidated (i.e. fall back to unverified boot).
 
 Beware that solid-state devices will most likely NOT overwrite the
 LUKS header, but rather write the new one into another memory cell
