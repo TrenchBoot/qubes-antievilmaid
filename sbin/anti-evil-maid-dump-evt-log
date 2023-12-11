@@ -1,0 +1,22 @@
+#!/bin/bash
+set -euo pipefail -o errtrace
+
+source anti-evil-maid-lib
+
+range=$(xl dmesg | grep "SLAUNCH: reserving event log" | sed "s#.*(\(.*\))#\1#")
+base=$(($(echo "$range" | cut -d " " -f 1)))
+size=$(($(echo "$range" | cut -d " " -f 3) - base))
+
+printf "Found event log at %#x, size %#x (%d) bytes\n" $base $size $size
+
+validatetpm || exit 1
+
+dd if=/dev/mem bs=1 skip=$base count=$size of=/tmp/log.bin
+
+if [ "$_tpm_version" -eq 2 ]; then
+	/usr/sbin/tpm2-evt-log-parser.awk /tmp/log.bin
+else
+	echo "TPM 1.2 event log format not supported yet"
+fi
+
+rm /tmp/log.bin
