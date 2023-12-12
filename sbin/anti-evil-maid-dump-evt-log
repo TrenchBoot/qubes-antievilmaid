@@ -16,7 +16,8 @@ dd if=/dev/mem bs=1 skip=$base count=$size of=/tmp/log.bin
 if [ "$_tpm_version" -eq 2 ]; then
 	/usr/sbin/tpm2-evt-log-parser.awk /tmp/log.bin
 else
-	echo "TPM 1.2 event log format not supported yet"
+	# Intel only, unless AMD implementation will choose to use TXT format
+	/usr/sbin/txt-tpm1-evt-log-parser.awk /tmp/log.bin
 fi
 
 rm /tmp/log.bin
