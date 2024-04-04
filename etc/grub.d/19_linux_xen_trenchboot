@@ -190,9 +190,9 @@ xen_list=`for i in /boot/xen*; do
       done`
 
 # Ignore case of SINIT files
-_shopt="$( shopt -p | grep nocaseglob)"
-shopt -s nocaseglob
-sinit_module_list=`for i in /boot/*SINIT*.BIN; do
+_shopt="$( shopt -p | grep -e nocaseglob -e extglob)"
+shopt -s nocaseglob extglob
+sinit_module_list=`for i in /boot/@(*SINIT*|SKL).BIN; do
   if grub_file_is_not_garbage "$i"; then
     echo "$i"
   fi
