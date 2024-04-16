@@ -72,3 +72,32 @@ function string_or_hex(str, len)
 	if (_len != len)
 		printf("... (event truncated to %d first bytes, was %d)\n", _len, len)
 }
+
+function replay_sha(vals, len, c,    val, _i, n, arr, cmd)
+{
+	val = sprintf("%0" len "." len "x", 0)
+	n = split(vals, arr, "\n")
+	for (_i = 1; _i < n; _i++) {
+		cmd = "echo " val arr[_i] " | xxd -r -p | " c " > /tmp/sha"
+		system(cmd)
+		getline val <"/tmp/sha"
+		close("/tmp/sha")
+		close(cmd)
+		# Drop trailing file name and newline character
+		val = substr(val, 1, len)
+	}
+	system("rm /tmp/sha")
+	print val
+}
+
+function replay_sha1(pcr)
+{
+	printf "    %d: ", pcr
+	replay_sha(SYMTAB["SHA1_" pcr], 40, "sha1sum")
+}
+
+function replay_sha256(pcr)
+{
+	printf "    %d: ", pcr
+	replay_sha(SYMTAB["SHA256_" pcr], 64, "sha256sum")
+}
