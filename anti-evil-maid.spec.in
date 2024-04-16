@@ -49,6 +49,7 @@ cp -r systemd $RPM_BUILD_ROOT/usr/lib
 /usr/sbin/anti-evil-maid-lib-tpm2
 /usr/sbin/anti-evil-maid-seal
 /usr/sbin/anti-evil-maid-tpm-setup
+/usr/sbin/tpm-evt-log-utils.awk
 /usr/sbin/tpm2-evt-log-parser.awk
 /usr/sbin/txt-tpm1-evt-log-parser.awk
 /usr/share/doc/anti-evil-maid/README
