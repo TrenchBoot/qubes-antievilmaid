@@ -1,56 +1,6 @@
 #!/usr/bin/gawk -bf
 @load "readfile"
-
-function assert(condition, string)
-{
-	if (!condition) {
-		print string
-		exit 1
-	}
-}
-
-function ord_init()
-{
-	for (_i = 0; _i < 256; _i++) {
-		ord[sprintf("%c", _i)] = _i
-	}
-}
-
-function x2n(hex, width)
-{
-	mult = 1
-	num = 0
-	for (_i = 0; _i < width; _i++) {
-		num += ord[substr(hex, _i+1, 1)] * mult
-		mult *= 256
-	}
-	return num
-}
-
-function hexdump(hex, len)
-{
-	for (_i = 0; _i < len; _i++) {
-		printf("%02x", ord[substr(hex, _i+1, 1)])
-	}
-}
-
-function string_or_hex(str, len)
-{
-	_len = len
-	if (_len > 128)
-		_len = 128
-	# String must start with a series of printable characters ...
-	if (match(str, "[[:graph:][:blank:]]*", a) != 1) {
-		hexdump(str, _len)
-	# ... long until the end, with "optional" (i.e. bad implementation) \0.
-	} else if (len != a[0, "length"] &&
-		   (len != a[0, "length"] + 1 || index(str, "\0") != len)) {
-		hexdump(str, _len)
-	} else
-		printf("%.*s", _len, a[0])
-	if (_len != len)
-		printf("... (event truncated to %d first bytes, was %d)", _len, len)
-}
+@include "/sbin/tpm-evt-log-utils.awk"
 
 BEGIN {
 	PROCINFO["readfile"]
@@ -119,10 +69,9 @@ BEGIN {
 		printf("    Digests:\n")
 		printf("      SHA1: ")
 		hexdump($3, 20)
-		printf("\n")
 		printf("    Event: ")
 		string_or_hex($5, x2n($4, 4))
-		printf("\n\n")
+		printf("\n")
 		$0 = substr($5, x2n($4, 4) + 1)
 	}
 }
