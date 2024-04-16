@@ -7,6 +7,8 @@ BEGIN {
 	# Start by assuming presence of a TCG-compatible header
 	FIELDWIDTHS = "4 4 20 4 16 4 1 1 1 1 1 *"
 	ord_init()
+	SHA1_17 = ""
+	SHA1_18 = ""
 }
 {
 	# TCG header is not present on Intel systems, so do nothing if it's not
@@ -69,9 +71,14 @@ BEGIN {
 		printf("    Digests:\n")
 		printf("      SHA1: ")
 		hexdump($3, 20)
+		sym = "SHA1_" x2n($1, 4)
+		SYMTAB[sym] = SYMTAB[sym] hex_noprint($3, 20) "\n"
 		printf("    Event: ")
 		string_or_hex($5, x2n($4, 4))
 		printf("\n")
 		$0 = substr($5, x2n($4, 4) + 1)
 	}
+	print "Expected PCR values:"
+	replay_sha1(17)
+	replay_sha1(18)
 }

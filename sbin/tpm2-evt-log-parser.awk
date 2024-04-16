@@ -6,6 +6,10 @@ BEGIN {
 	PROCINFO["readfile"]
 	FIELDWIDTHS = "4 4 20 4 16 4 1 1 1 1 4 *"
 	ord_init()
+	SHA1_17 = ""
+	SHA1_18 = ""
+	SHA256_17 = ""
+	SHA256_18 = ""
 }
 {
 	# Header sanity checks
@@ -59,6 +63,8 @@ BEGIN {
 			$4 = substr($4, 3)
 			printf("      %s: ", alg_name(a[1]))
 			hexdump($4, a[2])
+			sym = alg_name(a[1]) "_" x2n($1, 4)
+			SYMTAB[sym] = SYMTAB[sym] hex_noprint($4, a[2]) "\n"
 			$4 = substr($4, a[2]+1)
 		}
 		printf("    Event: ")
@@ -66,4 +72,11 @@ BEGIN {
 		printf("\n\n")
 		$0 = substr($6, x2n($5, 4) + 1)
 	}
+	print "Expected PCR values:"
+	print "  SHA1:"
+	replay_sha1(17)
+	replay_sha1(18)
+	print "  SHA256:"
+	replay_sha256(17)
+	replay_sha256(18)
 }
