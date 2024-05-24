@@ -9,6 +9,7 @@ BEGIN {
 	ord_init()
 	SHA1_17 = ""
 	SHA1_18 = ""
+	SHA1_255 = ""
 }
 {
 	# TCG header is not present on Intel systems, so do nothing if it's not

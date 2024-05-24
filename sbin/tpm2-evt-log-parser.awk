@@ -8,8 +8,10 @@ BEGIN {
 	ord_init()
 	SHA1_17 = ""
 	SHA1_18 = ""
+	SHA1_255 = ""
 	SHA256_17 = ""
 	SHA256_18 = ""
+	SHA256_255 = ""
 }
 {
 	# Header sanity checks
