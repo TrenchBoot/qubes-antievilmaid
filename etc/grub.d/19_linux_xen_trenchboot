@@ -80,6 +80,12 @@ case x"$GRUBFS" in
 	;;
 esac
 
+# A wrapper for GRUB's master compatible with GRUB releases.
+version_find_latest ()
+{
+  printf "%s\n" "$@" | version_sort | tail -1
+}
+
 title_correction_code=
 
 linux_entry ()
@@ -114,44 +120,56 @@ linux_entry ()
       save_default_entry | grub_add_tab | sed "s/^/$submenu_indentation/"
   fi
 
-  if [ -z "${prepare_boot_cache}" ]; then
-    prepare_boot_cache="$(prepare_grub_to_access_device ${GRUB_DEVICE_BOOT} | grub_add_tab)"
-  fi
-  printf '%s\n' "${prepare_boot_cache}" | sed "s/^/$submenu_indentation/"
   tmessage="$(gettext_printf "Enabling slaunch ...")"
   xmessage="$(gettext_printf "Loading Xen %s ..." ${xen_version})"
   lmessage="$(gettext_printf "Loading Linux %s ..." ${version})"
+
   sed "s/^/$submenu_indentation/" << EOF
 	echo	'$(echo "$tmessage" | grub_quote)'
 	slaunch
+EOF
+
+  if [ -n "$efi_xen_cfg" ]; then
+    smodule_dev="(\$root_dev)"
+    # doing `chainloader ($esp_dev)/...` doesn't help Xen open volume's
+    # filesystem because GRUB always associates root device with its handle, so
+    # have to point root at ESP
+    sed "s/^/$submenu_indentation/" << EOF
+	set root="\$esp_dev"
 	echo	'$(echo "$xmessage" | grub_quote)'
-        if [ "\$grub_platform" = "pc" -o "\$grub_platform" = "" ]; then
-            xen_rm_opts=
-        else
-            xen_rm_opts="no-real-mode edd=off"
-        fi
-	multiboot2	${rel_xen_dirname}/${xen_basename} placeholder ${xen_args} \${xen_rm_opts}
+	chainloader	${rel_xen_dirname}/${xen_basename} ${basename}
+EOF
+  else
+    smodule_dev=
+    printf '%s\n' "${prepare_boot_cache}" | sed "s/^/$submenu_indentation/"
+    sed "s/^/$submenu_indentation/" << EOF
+	echo	'$(echo "$xmessage" | grub_quote)'
+	multiboot2	${rel_xen_dirname}/${xen_basename} placeholder ${xen_args} no-real-mode edd=off
 	echo	'$(echo "$lmessage" | grub_quote)'
 	module2	${rel_dirname}/${basename} placeholder root=${linux_root_device_thisversion} ro ${args} aem.uuid=${GRUB_DEVICE_BOOT_UUID} rd.luks.key=/tmp/aem-keyfile rd.luks.crypttab=no
 EOF
-  if test -n "${initrd}" ; then
-    # TRANSLATORS: ramdisk isn't identifier. Should be translated.
-    message="$(gettext_printf "Loading initial ramdisk ...")"
-    sed "s/^/$submenu_indentation/" << EOF
+
+    if test -n "${initrd}"; then
+      # TRANSLATORS: ramdisk isn't identifier. Should be translated.
+      message="$(gettext_printf "Loading initial ramdisk ...")"
+      sed "s/^/$submenu_indentation/" << EOF
 	echo	'$(echo "$message" | grub_quote)'
 	module2	${rel_dirname}/${initrd}
 EOF
+    fi
   fi
+
   if test -n "${sinit_module_list}" ; then
     for i in ${sinit_module_list} ; do
       sinit_module=`basename $i`
       message="$(gettext_printf "Loading SINIT module %s ..." ${sinit_module})"
       sed "s/^/$submenu_indentation/" << EOF
 	echo	'$message'
-	slaunch_module	/${sinit_module}
+	slaunch_module	${smodule_dev}/${sinit_module}
 EOF
     done
   fi
+
   sed "s/^/$submenu_indentation/" << EOF
 }
 EOF
@@ -176,18 +194,20 @@ if [ "x${linux_list}" = "x" ] ; then
     exit 0
 fi
 
-file_is_not_sym () {
+file_is_not_xen_garbage () {
     case "$1" in
 	*/xen-syms-*)
+	    return 1;;
+	*/xenpolicy-*)
+	    return 1;;
+	*/*.config)
+	    return 1;;
+	*/*.cfg)
 	    return 1;;
 	*)
 	    return 0;;
     esac
 }
-
-xen_list=`for i in /boot/xen*; do
-        if grub_file_is_not_garbage "$i" && file_is_not_sym "$i" ; then echo -n "$i " ; fi
-      done`
 
 # Ignore case of SINIT files
 _shopt="$( shopt -p | grep -e nocaseglob -e extglob)"
@@ -214,93 +234,145 @@ case "$machine" in
     *) GENKERNEL_ARCH="$machine" ;;
 esac
 
+print_entries() {
+    # Glob to get list of Xen binaries.
+    xen_glob=$1
+    # Extra indentation to add to menu entries in a submenu.
+    submenu_indentation=$2
+
+    xen_list=`for i in $xen_glob; do
+        if grub_file_is_not_garbage "$i" && file_is_not_xen_garbage "$i" ; then echo -n "$i " ; fi
+    done`
+
+    is_first_entry=true
+    is_first_efi_entry=true
+
+    while [ "x${xen_list}" != "x" ] ; do
+        list="${linux_list}"
+        current_xen=`version_find_latest $xen_list`
+        xen_basename=`basename ${current_xen}`
+        xen_dirname=`dirname ${current_xen}`
+        rel_xen_dirname=`make_system_path_relative_to_its_root $xen_dirname`
+        xen_version=`echo $xen_basename | sed -e "s,.gz$,,g;s,^xen-,,g"`
+        if [ -z "$boot_device_id" ]; then
+            boot_device_id="$(grub_get_device_id "${GRUB_DEVICE}")"
+        fi
+        if [ "x$is_first_entry" != xtrue ]; then
+            echo "	submenu '$(gettext_printf "Xen hypervisor, version %s with AEM boot" "${xen_version}" | grub_quote)' \$menuentry_id_option 'xen-hypervisor-$xen_version-$boot_device_id' {"
+        fi
+
+        efi_xen_cfg=
+        if echo "${current_xen}" | grep -qi '.efi$'; then
+            efi_xen_cfg=`echo ${current_xen} | sed -e "s,\\.efi\$,\\.cfg,"`
+        fi
+
+        while [ "x$list" != "x" ] ; do
+            linux=`version_find_latest $list`
+            gettext_printf "Found linux image: %s\n" "$linux" >&2
+            basename=`basename $linux`
+            dirname=`dirname $linux`
+            rel_dirname=`make_system_path_relative_to_its_root $dirname`
+            version=`echo $basename | sed -e "s,^[^0-9]*-,,g"`
+            alt_version=`echo $version | sed -e "s,\.old$,,g"`
+            linux_root_device_thisversion="${LINUX_ROOT_DEVICE}"
+
+            initrd=
+            for i in "initrd.img-${version}" "initrd-${version}.img" "initrd-${version}.gz" \
+               "initrd-${version}" "initramfs-${version}.img" \
+               "initrd.img-${alt_version}" "initrd-${alt_version}.img" \
+               "initrd-${alt_version}" "initramfs-${alt_version}.img" \
+               "initramfs-genkernel-${version}" \
+               "initramfs-genkernel-${alt_version}" \
+               "initramfs-genkernel-${GENKERNEL_ARCH}-${version}" \
+               "initramfs-genkernel-${GENKERNEL_ARCH}-${alt_version}" ; do
+                if test -e "${dirname}/${i}" ; then
+                    initrd="$i"
+                    break
+                fi
+            done
+            if test -n "${initrd}" ; then
+                gettext_printf "Found initrd image: %s\n" "${dirname}/${initrd}" >&2
+            else
+        # "UUID=" magic is parsed by initrds.  Since there's no initrd, it can't work here.
+                linux_root_device_thisversion=${GRUB_DEVICE}
+            fi
+
+            if [ -n "$efi_xen_cfg" ]; then
+              cp "${linux}" "${xen_dirname}/aem-${basename}"
+
+              cat >> "$efi_xen_cfg" << EOF
+    [${basename}]
+    options=placeholder ${xen_args} no-real-mode edd=off
+    kernel=aem-${basename} placeholder root=${linux_root_device_thisversion} ro ${args} aem.uuid=${GRUB_DEVICE_BOOT_UUID} rd.luks.key=/tmp/aem-keyfile rd.luks.crypttab=no
+EOF
+
+              if test -n "${initrd}" ; then
+                cp "${dirname}/${initrd}" "${xen_dirname}/aem-${initrd}"
+                cat >> "$efi_xen_cfg" << EOF
+    ramdisk=aem-${initrd}
+EOF
+              fi
+            fi
+
+            if [ "x$is_first_entry" = xtrue ]; then
+                linux_entry "${OS}" "${version}" "${xen_version}" simple \
+                    "${GRUB_CMDLINE_LINUX} ${GRUB_CMDLINE_LINUX_DEFAULT}" "${GRUB_CMDLINE_XEN} ${GRUB_CMDLINE_XEN_DEFAULT}"
+
+                submenu_indentation="$submenu_indentation$grub_tab"
+
+                if [ -z "$boot_device_id" ]; then
+                    boot_device_id="$(grub_get_device_id "${GRUB_DEVICE}")"
+                fi
+                # TRANSLATORS: %s is replaced with an OS name
+                echo "submenu '$(gettext_printf "Advanced options with AEM boot for %s (with Xen hypervisor)" "${OS}" | grub_quote)' \$menuentry_id_option 'gnulinux-advanced-$boot_device_id' {"
+            echo "	submenu '$(gettext_printf "Xen hypervisor, version %s" "${xen_version}" | grub_quote)' \$menuentry_id_option 'xen-hypervisor-$xen_version-$boot_device_id' {"
+            fi
+            is_first_entry=false
+
+            linux_entry "${OS}" "${version}" "${xen_version}" advanced \
+                "${GRUB_CMDLINE_LINUX} ${GRUB_CMDLINE_LINUX_DEFAULT}" "${GRUB_CMDLINE_XEN} ${GRUB_CMDLINE_XEN_DEFAULT}"
+            if [ "x${GRUB_DISABLE_RECOVERY}" != "xtrue" ]; then
+                linux_entry "${OS}" "${version}" "${xen_version}" recovery \
+                    "single ${GRUB_CMDLINE_LINUX}" "${GRUB_CMDLINE_XEN}"
+            fi
+
+            list=`echo $list | tr ' ' '\n' | grep -vx $linux | tr '\n' ' '`
+        done
+        if [ x"$is_first_entry" != xtrue ]; then
+            echo '	}'
+        fi
+
+        xen_list=`echo $xen_list | tr ' ' '\n' | grep -vx $current_xen | tr '\n' ' '`
+    done
+
+    # If at least one kernel was found, then we need to
+    # add a closing '}' for the submenu command.
+    if [ x"$is_first_entry" != xtrue ]; then
+        echo '}'
+    fi
+}
+
+# cleanup previous AEM UEFI installations (-f is to account for unexpanded globs)
+rm -f /boot/efi/EFI/qubes/xen-*.cfg /boot/efi/EFI/qubes/aem-*
+
+prepare_boot_cache="$(prepare_grub_to_access_device ${GRUB_DEVICE_BOOT} | grub_add_tab)"
+
+# In UEFI case aem/ directory is located on /boot drive, not on /boot/efi
+cat << EOF
+if [ "\$grub_platform" = "efi" ]; then
+${grub_tab}set esp_dev="\$root"
+${prepare_boot_cache}
+${grub_tab}set root_dev="\$root"
+fi
+EOF
+
 echo "if [ -d /aem/ ]; then"
 
-# Extra indentation to add to menu entries in a submenu. We're not in a submenu
-# yet, so it's empty. In a submenu it will be equal to '\t' (one tab).
-submenu_indentation=""
-
-is_first_entry=true
-
-while [ "x${xen_list}" != "x" ] ; do
-    list="${linux_list}"
-    current_xen=`version_find_latest $xen_list`
-    xen_basename=`basename ${current_xen}`
-    xen_dirname=`dirname ${current_xen}`
-    rel_xen_dirname=`make_system_path_relative_to_its_root $xen_dirname`
-    xen_version=`echo $xen_basename | sed -e "s,.gz$,,g;s,^xen-,,g"`
-    if [ -z "$boot_device_id" ]; then
-	boot_device_id="$(grub_get_device_id "${GRUB_DEVICE}")"
-    fi
-    if [ "x$is_first_entry" != xtrue ]; then
-	echo "	submenu '$(gettext_printf "Xen hypervisor, version %s with AEM boot" "${xen_version}" | grub_quote)' \$menuentry_id_option 'xen-hypervisor-$xen_version-$boot_device_id' {"
-    fi
-    while [ "x$list" != "x" ] ; do
-	linux=`version_find_latest $list`
-	gettext_printf "Found linux image: %s\n" "$linux" >&2
-	basename=`basename $linux`
-	dirname=`dirname $linux`
-	rel_dirname=`make_system_path_relative_to_its_root $dirname`
-	version=`echo $basename | sed -e "s,^[^0-9]*-,,g"`
-	alt_version=`echo $version | sed -e "s,\.old$,,g"`
-	linux_root_device_thisversion="${LINUX_ROOT_DEVICE}"
-
-	initrd=
-	for i in "initrd.img-${version}" "initrd-${version}.img" "initrd-${version}.gz" \
-	   "initrd-${version}" "initramfs-${version}.img" \
-	   "initrd.img-${alt_version}" "initrd-${alt_version}.img" \
-	   "initrd-${alt_version}" "initramfs-${alt_version}.img" \
-	   "initramfs-genkernel-${version}" \
-	   "initramfs-genkernel-${alt_version}" \
-	   "initramfs-genkernel-${GENKERNEL_ARCH}-${version}" \
-	   "initramfs-genkernel-${GENKERNEL_ARCH}-${alt_version}" ; do
-	    if test -e "${dirname}/${i}" ; then
-		initrd="$i"
-		break
-	    fi
-	done
-	if test -n "${initrd}" ; then
-	    gettext_printf "Found initrd image: %s\n" "${dirname}/${initrd}" >&2
-	else
-    # "UUID=" magic is parsed by initrds.  Since there's no initrd, it can't work here.
-	    linux_root_device_thisversion=${GRUB_DEVICE}
-	fi
-
-	if [ "x$is_first_entry" = xtrue ]; then
-	    linux_entry "${OS}" "${version}" "${xen_version}" simple \
-		"${GRUB_CMDLINE_LINUX} ${GRUB_CMDLINE_LINUX_DEFAULT}" "${GRUB_CMDLINE_XEN} ${GRUB_CMDLINE_XEN_DEFAULT}"
-
-	    submenu_indentation="$grub_tab$grub_tab"
-    
-	    if [ -z "$boot_device_id" ]; then
-		boot_device_id="$(grub_get_device_id "${GRUB_DEVICE}")"
-	    fi
-            # TRANSLATORS: %s is replaced with an OS name
-	    echo "submenu '$(gettext_printf "Advanced options with AEM boot for %s (with Xen hypervisor)" "${OS}" | grub_quote)' \$menuentry_id_option 'gnulinux-advanced-$boot_device_id' {"
-	echo "	submenu '$(gettext_printf "Xen hypervisor, version %s" "${xen_version}" | grub_quote)' \$menuentry_id_option 'xen-hypervisor-$xen_version-$boot_device_id' {"
-	fi
-	is_first_entry=false
-
-	linux_entry "${OS}" "${version}" "${xen_version}" advanced \
-	    "${GRUB_CMDLINE_LINUX} ${GRUB_CMDLINE_LINUX_DEFAULT}" "${GRUB_CMDLINE_XEN} ${GRUB_CMDLINE_XEN_DEFAULT}"
-	if [ "x${GRUB_DISABLE_RECOVERY}" != "xtrue" ]; then
-	    linux_entry "${OS}" "${version}" "${xen_version}" recovery \
-		"single ${GRUB_CMDLINE_LINUX}" "${GRUB_CMDLINE_XEN}"
-	fi
-
-	list=`echo $list | tr ' ' '\n' | grep -vx $linux | tr '\n' ' '`
-    done
-    if [ x"$is_first_entry" != xtrue ]; then
-	echo '	}'
-    fi
-    xen_list=`echo $xen_list | tr ' ' '\n' | grep -vx $current_xen | tr '\n' ' '`
-done
-
-# If at least one kernel was found, then we need to
-# add a closing '}' for the submenu command.
-if [ x"$is_first_entry" != xtrue ]; then
-  echo '}'
-fi
+echo 'if [ "$grub_platform" = "pc" -o "$grub_platform" = "" ]; then'
+print_entries '/boot/xen*' "${grub_tab}"
+echo 'elif [ "$grub_platform" = "efi" ]; then'
+print_entries '/boot/efi/EFI/qubes/xen-*.efi' "${grub_tab}"
+echo 'fi'
 
 echo "$title_correction_code"
 
