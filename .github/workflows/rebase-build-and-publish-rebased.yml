@@ -1,0 +1,41 @@
+name: Rebase and build the last successful automatic rebase of main branch
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: >
+          Set this input to do a dry run without building the packages to test
+          the rebase.
+        required: false
+        type: boolean
+        default: false
+  schedule:
+    - cron: '0 0 * * 6'
+
+concurrency:
+  group: automatic-rebase
+
+jobs:
+  try-rebase:
+    uses: TrenchBoot/.github/.github/workflows/rebase.yml@v2
+    secrets:
+      first-remote-token: ${{secrets.TRENCHBOOT_REBASE_TOKEN}}
+    permissions:
+      # For creation/deletion/pushing to branches and creating PRs
+      contents: write
+    with:
+      downstream-repo: 'https://github.com/TrenchBoot/qubes-antievilmaid.git'
+      downstream-branch: 'main'
+      upstream-repo: 'https://github.com/QubesOS/qubes-antievilmaid.git'
+      upstream-branch: 'main'
+      commit-user-name: 'github-actions[bot]'
+      commit-user-email: 'github-actions[bot]@users.noreply.github.com'
+      cicd-trigger-resume: '7. Rerun all jobs for the workflow https://github.com/TrenchBoot/qubes-antievilmaid/actions/runs/${{ github.run_id }} to resume automated rebase.'
+  antievilmaid:
+    needs: try-rebase
+    if: ${{ needs.try-rebase.outputs.rebase-exit-code == '0' && ! inputs.dry_run }}
+    uses: TrenchBoot/.github/.github/workflows/qubes-dom0-packagev2.yml@v2
+    with:
+      qubes-component: 'antievilmaid'
+      qubes-component-branch: 'main-rebased'
