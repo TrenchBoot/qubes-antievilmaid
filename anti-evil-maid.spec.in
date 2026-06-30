@@ -15,6 +15,7 @@ Vendor:		Invisible Things Lab
 License:	GPL
 URL:		http://www.qubes-os.org
 Source0:	%{name}-%{version}.tar.gz
+BuildArch: noarch
 
 %description
 Anti Evil Maid for initramfs-based systems.
